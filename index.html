@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>MQTT 儀表板 V6 - 動態數據與過渡效果</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: #f4f6f9;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 30px;
+    }
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    #messageBox {
+      height: 200px;
+      overflow-y: auto;
+      background: #fff;
+      border: 1px solid #ddd;
+      padding: 10px;
+      border-radius: 10px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    canvas {
+      background: #fff;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2 class="mb-4">🌐 MQTT 即時數據儀表板 V6</h2>
+ 
+    <div class="mb-3">
+      <div>
+        <span id="statusDot" class="status-dot" style="background: gray;"></span>
+        <strong id="statusText">連線中...</strong>
+      </div>
+      <div class="mt-2">
+        訂閱主題：<code>DK2025/XYMD02</code> ｜ 接收訊息數：<span id="msgCount">0</span>
+      </div>
+    </div>
+ 
+    <div class="row">
+      <div class="col-md-6">
+        <canvas id="tempChart" height="250"></canvas>
+      </div>
+      <div class="col-md-6">
+        <canvas id="humChart" height="250"></canvas>
+      </div>
+    </div>
+ 
+    <h5 class="mt-4">📬 原始訊息</h5>
+    <div id="messageBox"></div>
+  </div>
+ 
+  <script>
+    const topic = 'DK2025/XYMD02';
+    let count = 0;
+ 
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const msgBox = document.getElementById('messageBox');
+    const msgCount = document.getElementById('msgCount');
+ 
+    const tempCtx = document.getElementById('tempChart').getContext('2d');
+    const humCtx = document.getElementById('humChart').getContext('2d');
+ 
+    // 時間格式化為 UTC-8 時區
+    const formatTime = (iso) => {
+      const date = new Date(iso);
+      // 直接減去 8 小時 (8 * 60 * 60 * 1000 毫秒)
+      const local = new Date(date.getTime() - (8 * 60 * 60 * 1000)); // UTC-8
+      const pad = (n) => n.toString().padStart(2, '0');
+      return `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`;
+    }
+ 
+    const tempChart = new Chart(tempCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: '溫度 (°C)',
+          data: [],
+          borderColor: '#ff6384',
+          backgroundColor: 'rgba(255,99,132,0.1)',
+          tension: 0.3
+        }]
+      },
+      options: {
+        animation: {
+          duration: 1000, // 設定動畫持續時間
+          easing: 'easeInOutQuad' // 設定緩動效果
+        },
+        responsive: true,
+        scales: {
+          y: {
+            min: 27,
+            max: 30,
+            title: {
+              display: true,
+              text: '溫度 (°C)'
+            }
+          }
+        }
+      }
+    });
+ 
+    const humChart = new Chart(humCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: '濕度 (%)',
+          data: [],
+          borderColor: '#36a2eb',
+          backgroundColor: 'rgba(54,162,235,0.1)',
+          tension: 0.3
+        }]
+      },
+      options: {
+        animation: {
+          duration: 1000, // 設定動畫持續時間
+          easing: 'easeInOutQuad' // 設定緩動效果
+        },
+        responsive: true,
+        scales: {
+          y: {
+            min: 35,
+            max: 100,
+            title: {
+              display: true,
+              text: '濕度 (%)'
+            }
+          }
+        }
+      }
+    });
+ 
+    const client = mqtt.connect('ws://broker.emqx.io:8083/mqtt');
+ 
+    client.on('connect', () => {
+      statusDot.style.background = 'green';
+      statusText.textContent = '已連線';
+      client.subscribe(topic, (err) => {
+        if (!err) {
+          console.log('已訂閱主題:', topic);
+        }
+      });
+    });
+ 
+    client.on('reconnect', () => {
+      statusDot.style.background = 'orange';
+      statusText.textContent = '重新連線中...';
+    });
+ 
+    client.on('error', (err) => {
+      console.error('連線錯誤:', err);
+      statusDot.style.background = 'red';
+      statusText.textContent = '連線錯誤';
+    });
+ 
+    client.on('message', (topic, message) => {
+      count++;
+      msgCount.textContent = count;
+ 
+      const raw = message.toString();
+      let json;
+      let formattedTime;
+ 
+      try {
+        json = JSON.parse(raw);
+        formattedTime = formatTime(json.Time || new Date());
+      } catch (e) {
+        console.error('JSON 解析錯誤:', e);
+        return;
+      }
+ 
+      const newMsg = document.createElement('div');
+      newMsg.innerHTML = `<span style="color:gray;">[${formattedTime}]</span> <span style="color:#007acc;"> ${raw}</span>`;
+      msgBox.appendChild(newMsg);
+      msgBox.scrollTop = msgBox.scrollHeight;
+ 
+      const temperature = parseFloat(json.Temperature);
+      const humidity = parseFloat(json.Humidity);
+ 
+      if (!isNaN(temperature)) {
+        tempChart.data.labels.push(formattedTime);
+        tempChart.data.datasets[0].data.push(temperature);
+        if (tempChart.data.labels.length > 10) {
+          tempChart.data.labels.shift();
+          tempChart.data.datasets[0].data.shift();
+        }
+        tempChart.update();
+      }
+ 
+      if (!isNaN(humidity)) {
+        humChart.data.labels.push(formattedTime);
+        humChart.data.datasets[0].data.push(humidity);
+        if (humChart.data.labels.length > 10) {
+          humChart.data.labels.shift();
+          humChart.data.datasets[0].data.shift();
+        }
+        humChart.update();
+      }
+    });
+  </script>
+</body>
+</html>
+ 
+ 
